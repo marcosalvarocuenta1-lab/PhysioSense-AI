@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI } from "@google/genai";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Activity, Bluetooth, Brain, Play, Square, Save, RotateCcw, Fingerprint, Wifi, WifiOff, User, CheckCircle2, Circle } from 'lucide-react';
+import { Activity, Bluetooth, Brain, Play, Square, Save, RotateCcw, Fingerprint, Wifi, WifiOff, User, CheckCircle2, Circle, FileDown, Info } from 'lucide-react';
+import { jsPDF } from "jspdf";
 
 // Definición de tipos para Web Bluetooth API
 declare global {
@@ -11,6 +12,17 @@ declare global {
     disconnect(): void;
     connected: boolean;
     device: BluetoothDevice;
+    getPrimaryService(service: string | number): Promise<BluetoothRemoteGATTService>;
+  }
+
+  interface BluetoothRemoteGATTService {
+    getCharacteristic(characteristic: string | number): Promise<BluetoothRemoteGATTCharacteristic>;
+  }
+
+  interface BluetoothRemoteGATTCharacteristic {
+    startNotifications(): Promise<BluetoothRemoteGATTCharacteristic>;
+    addEventListener(type: string, listener: (event: any) => void): void;
+    value: DataView;
   }
 
   interface BluetoothDevice {
@@ -23,7 +35,7 @@ declare global {
     bluetooth: {
       requestDevice(options?: {
         filters?: any[];
-        optionalServices?: string[];
+        optionalServices?: (string | number)[];
         acceptAllDevices?: boolean;
       }): Promise<BluetoothDevice>;
     };
@@ -59,6 +71,7 @@ const App = () => {
   const [aiReport, setAiReport] = useState<string>('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [deviceError, setDeviceError] = useState<string>('');
+  const [btStatus, setBtStatus] = useState<string>('');
   
   // Nuevo Estado
   const [patientName, setPatientName] = useState('');
@@ -75,24 +88,45 @@ const App = () => {
 
   // Función para conectar Bluetooth Real
   const connectBluetooth = async () => {
+    setDeviceError('');
+    setBtStatus('Iniciando búsqueda...');
+
+    if (!navigator.bluetooth) {
+      setDeviceError('Tu navegador no soporta Bluetooth Web. Por favor usa Chrome, Edge o Bluefy (iOS).');
+      return;
+    }
+
     try {
-      setDeviceError('');
+      // Intentamos conectar aceptando todos los dispositivos para máxima compatibilidad
+      // Normalmente los módulos HC-05/HM-10 usan el servicio 0xFFE0
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
-        optionalServices: ['0000ffe0-0000-1000-8000-00805f9b34fb', '6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+        optionalServices: ['0000ffe0-0000-1000-8000-00805f9b34fb', 0xFFE0] 
       });
 
+      setBtStatus('Dispositivo seleccionado. Conectando...');
       deviceRef.current = device;
+      
       const server = await device.gatt?.connect();
       serverRef.current = server || null;
 
       if (server) {
         setIsConnected(true);
+        setBtStatus('');
+        // Aquí iría la lógica para suscribirse a notificaciones (característica 0xFFE1 usualmente)
+        // Por ahora simulamos el flujo de datos para que la UI funcione
         simulateDataStream(); 
       }
     } catch (error: any) {
       console.error(error);
-      setDeviceError('No se pudo conectar. Asegúrate de usar Chrome/Edge y tener Bluetooth encendido.');
+      setBtStatus('');
+      if (error.name === 'NotFoundError') {
+        setDeviceError('Cancelaste la búsqueda o no seleccionaste ningún dispositivo.');
+      } else if (error.name === 'SecurityError') {
+        setDeviceError('Permiso denegado. Asegúrate de estar en un sitio HTTPS o localhost.');
+      } else {
+        setDeviceError('Error de conexión: ' + error.message + '. Intenta reiniciar el dispositivo Bluetooth.');
+      }
     }
   };
 
@@ -169,7 +203,7 @@ const App = () => {
       };
 
       const prompt = `
-        Actúa como un fisioterapeuta experto. Analiza los siguientes datos de una sesión de rehabilitación de mano.
+        Actúa como un fisioterapeuta experto impulsado por Gemini AI. Analiza los siguientes datos de una sesión de rehabilitación de mano.
         
         Paciente: ${patientName || 'No registrado'}
         
@@ -185,7 +219,7 @@ const App = () => {
         2. Si se logró flexión completa o existe rigidez.
         3. Recomendación clínica para la próxima sesión.
         
-        Responde en español, formato markdown limpio, tono profesional y empático.
+        Responde en español, formato texto simple pero estructurado (sin negritas markdown excesivas), tono profesional y empático.
       `;
 
       const response = await ai.models.generateContent({
@@ -196,10 +230,58 @@ const App = () => {
       setAiReport(response.text || "No se pudo generar el reporte.");
     } catch (error) {
       console.error(error);
-      setAiReport("Error al conectar con la IA para el análisis.");
+      setAiReport("Error al conectar con Gemini AI para el análisis.");
     } finally {
       setIsGeneratingReport(false);
     }
+  };
+
+  // Descargar PDF
+  const downloadPDF = () => {
+    if (!aiReport) return;
+    
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    
+    // Header
+    doc.setFontSize(20);
+    doc.setTextColor(33, 150, 243); // Blue
+    doc.text("PhysioSense AI - Reporte Clínico", 20, 20);
+    
+    // Info
+    doc.setFontSize(12);
+    doc.setTextColor(0);
+    doc.text(`Paciente: ${patientName || 'No registrado'}`, 20, 35);
+    doc.text(`Fecha: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`, 20, 42);
+    doc.text(`Asistente IA: Google Gemini`, 20, 49);
+
+    // Stats Summary (Simple)
+    doc.setDrawColor(200);
+    doc.line(20, 55, pageWidth - 20, 55);
+    
+    doc.setFontSize(14);
+    doc.text("Resumen de Sesión", 20, 65);
+    doc.setFontSize(10);
+    
+    if (history.length > 0) {
+      const maxIndice = Math.max(...history.map(h => h.indice));
+      const maxMedio = Math.max(...history.map(h => h.medio));
+      doc.text(`Máxima Flexión Índice: ${maxIndice}°`, 20, 75);
+      doc.text(`Máxima Flexión Medio: ${maxMedio}°`, 20, 82);
+      doc.text(`Duración: ${history.length} muestras`, 100, 75);
+    }
+
+    doc.line(20, 90, pageWidth - 20, 90);
+
+    // AI Report Content
+    doc.setFontSize(14);
+    doc.text("Evaluación Terapéutica (Gemini)", 20, 105);
+    
+    doc.setFontSize(11);
+    const splitText = doc.splitTextToSize(aiReport.replace(/\*/g, ''), pageWidth - 40);
+    doc.text(splitText, 20, 115);
+    
+    doc.save(`Reporte_PhysioSense_${patientName || 'Paciente'}.pdf`);
   };
 
   const toggleFinger = (key: string) => {
@@ -210,22 +292,32 @@ const App = () => {
   if (!isConnected) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-10 space-y-8 text-center transition-all duration-500 ease-in-out">
+        <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-10 space-y-8 text-center transition-all duration-500 ease-in-out border border-slate-100">
           <div className="space-y-2">
             <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-6 transform transition-transform hover:scale-105">
               <Activity className="w-8 h-8" />
             </div>
             <h1 className="text-3xl font-light tracking-tight text-slate-900">PhysioSense AI</h1>
-            <p className="text-slate-500 font-light">Monitor de Rehabilitación Inteligente</p>
+            <p className="text-slate-500 font-light">Monitor de Rehabilitación con <span className="font-semibold text-indigo-500">Gemini</span></p>
           </div>
           
-          <div className="space-y-4 pt-4">
+          <div className="bg-blue-50 p-4 rounded-xl text-left">
+            <div className="flex items-start">
+              <Info className="w-5 h-5 text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
+              <p className="text-xs text-blue-700">
+                Para conectar tu guante, asegúrate que el Bluetooth esté encendido. Al pulsar "Conectar", busca dispositivos como <strong>HM-10</strong>, <strong>HC-05</strong>, <strong>BT05</strong> o similar.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4 pt-2">
             <button 
               onClick={connectBluetooth}
-              className="w-full group relative flex items-center justify-center py-4 px-6 border border-transparent text-sm font-medium rounded-2xl text-white bg-slate-900 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-900 transition-all shadow-lg hover:shadow-xl"
+              disabled={!!btStatus}
+              className={`w-full group relative flex items-center justify-center py-4 px-6 border border-transparent text-sm font-medium rounded-2xl text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-900 transition-all shadow-lg hover:shadow-xl ${btStatus ? 'bg-slate-500 cursor-wait' : 'bg-slate-900 hover:bg-slate-800'}`}
             >
               <Bluetooth className="w-5 h-5 mr-3" />
-              Conectar Guante
+              {btStatus || 'Conectar Guante'}
             </button>
             
             <button 
@@ -233,18 +325,18 @@ const App = () => {
               className="w-full flex items-center justify-center py-4 px-6 border border-slate-200 text-sm font-medium rounded-2xl text-slate-600 bg-white hover:bg-slate-50 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-200 transition-all"
             >
               <Play className="w-5 h-5 mr-3" />
-              Iniciar Demo
+              Iniciar Demo (Sin Hardware)
             </button>
           </div>
 
           {deviceError && (
-            <div className="p-3 bg-red-50 text-red-600 rounded-xl text-xs">
+            <div className="p-3 bg-red-50 text-red-600 rounded-xl text-xs border border-red-100">
               {deviceError}
             </div>
           )}
           
           <p className="text-xs text-slate-400 font-light pt-4">
-            Diseñado para uso clínico y personal
+            Powered by Google Gemini
           </p>
         </div>
       </div>
@@ -381,10 +473,10 @@ const App = () => {
                 <div>
                   <h3 className="text-xl font-semibold text-slate-800 flex items-center mb-2">
                     <Brain className="w-6 h-6 mr-2 text-indigo-600" />
-                    Asistente Clínico
+                    Asistente Clínico (Gemini)
                   </h3>
                   <p className="text-sm text-slate-500 leading-relaxed">
-                    Genera un reporte detallado del progreso utilizando IA para analizar los datos biomecánicos.
+                    Genera un reporte detallado del progreso utilizando <strong>Gemini AI</strong> para analizar los datos biomecánicos.
                   </p>
                 </div>
 
@@ -414,7 +506,7 @@ const App = () => {
                     {isGeneratingReport ? (
                       <>
                         <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-                        <span>Generando...</span>
+                        <span>Analizando con Gemini...</span>
                       </>
                     ) : (
                       <>
@@ -427,10 +519,21 @@ const App = () => {
               </div>
 
               {/* Columna Derecha: Resultado */}
-              <div className="md:w-2/3">
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4">Informe Generado</label>
+              <div className="md:w-2/3 flex flex-col h-full">
+                <div className="flex justify-between items-center mb-4">
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Informe Generado</label>
+                  {aiReport && (
+                    <button 
+                      onClick={downloadPDF}
+                      className="text-xs flex items-center bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      <FileDown className="w-3.5 h-3.5 mr-1.5" />
+                      Descargar PDF
+                    </button>
+                  )}
+                </div>
                 {aiReport ? (
-                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 h-full max-h-96 overflow-y-auto custom-scrollbar">
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex-grow h-full max-h-96 overflow-y-auto custom-scrollbar">
                     <div className="prose prose-sm prose-indigo max-w-none text-slate-700">
                       <div className="whitespace-pre-wrap">{aiReport}</div>
                     </div>
@@ -438,7 +541,7 @@ const App = () => {
                 ) : (
                   <div className="h-full min-h-[200px] flex flex-col items-center justify-center text-slate-400 bg-slate-50/50 rounded-2xl border-2 border-dashed border-slate-100">
                     <Fingerprint className="w-10 h-10 mb-3 opacity-20" />
-                    <p className="text-sm">Esperando datos para análisis...</p>
+                    <p className="text-sm">Esperando datos para análisis de Gemini...</p>
                   </div>
                 )}
               </div>
