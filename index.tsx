@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI } from "@google/genai";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Activity, Bluetooth, Brain, Play, Square, Save, RotateCcw, Fingerprint, Wifi, WifiOff, User, CheckCircle2, Circle, FileDown, Info, AlertCircle, Key } from 'lucide-react';
+import { Activity, Bluetooth, Brain, Play, Square, Save, RotateCcw, Fingerprint, Wifi, WifiOff, User, CheckCircle2, Circle, FileDown, Info, AlertCircle } from 'lucide-react';
 import { jsPDF } from "jspdf";
 
-// Definición de tipos para Web Bluetooth API y AI Studio
+// Definición de tipos para Web Bluetooth API
 declare global {
   interface BluetoothRemoteGATTServer {
     connect(): Promise<BluetoothRemoteGATTServer>;
@@ -87,7 +87,6 @@ const App = () => {
   const [deviceError, setDeviceError] = useState<string>('');
   const [btStatus, setBtStatus] = useState<string>('');
   const [connectedDeviceName, setConnectedDeviceName] = useState<string>('');
-  const [hasApiKey, setHasApiKey] = useState(false);
   
   // Nuevo Estado
   const [patientName, setPatientName] = useState('');
@@ -99,33 +98,6 @@ const App = () => {
   const deviceRef = useRef<BluetoothDevice | null>(null);
   const serverRef = useRef<BluetoothRemoteGATTServer | null>(null);
   const bufferRef = useRef<string>(""); // Para acumular fragmentos de datos Bluetooth
-
-  // Verificar si hay API Key seleccionada al cargar
-  useEffect(() => {
-    const checkKey = async () => {
-      if (window.aistudio) {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        setHasApiKey(hasKey);
-      } else {
-        // Fallback para entornos locales o dev manual
-        setHasApiKey(!!process.env.API_KEY);
-      }
-    };
-    checkKey();
-  }, []);
-
-  // Función para abrir el selector de API Key
-  const handleConnectGemini = async () => {
-    if (window.aistudio) {
-      try {
-        await window.aistudio.openSelectKey();
-        // Asumimos éxito si no lanza error (Race condition mitigation)
-        setHasApiKey(true);
-      } catch (error) {
-        console.error("Error seleccionando key:", error);
-      }
-    }
-  };
 
   // Manejo de datos entrantes desde Bluetooth
   const handleCharacteristicValueChanged = (event: any) => {
@@ -313,20 +285,21 @@ const App = () => {
 
   // Generar reporte con Gemini
   const generateAIReport = async () => {
-    // Si no hay key en el entorno, intentamos pedirla (si no se pidió antes)
-    if (!process.env.API_KEY && !hasApiKey) {
-        setAiReport("Error: Debes conectar tu cuenta de Google Gemini primero.");
-        return;
-    }
-
-    // Instanciar el cliente justo antes de llamar para obtener la key actualizada
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-
     if (history.length === 0) return;
     setIsGeneratingReport(true);
     setAiReport('');
 
+    // Uso seguro de la API Key desde el entorno
+    const apiKey = process.env.API_KEY || '';
+    if (!apiKey) {
+         setAiReport("Error: No se detectó una API Key válida. Asegúrate de configurar la clave en el entorno.");
+         setIsGeneratingReport(false);
+         return;
+    }
+
     try {
+      const ai = new GoogleGenAI({ apiKey });
+      
       const stats = {
         muestras: history.length,
         promedio_indice: Math.round(history.reduce((a, b) => a + b.indice, 0) / history.length),
@@ -368,13 +341,6 @@ const App = () => {
       let errorMsg = "Error conectando con Gemini.";
       if (error.message.includes('403')) errorMsg = "Error de permisos (API Key inválida o cuota excedida).";
       if (error.message.includes('Failed to fetch')) errorMsg = "Error de conexión a internet.";
-      
-      // Si el error es por falta de key (400/403), sugerir reconectar
-      if (errorMsg.includes("API Key") && window.aistudio) {
-          setHasApiKey(false); // Resetear estado para mostrar botón
-          errorMsg += " Por favor, vuelve a vincular tu cuenta.";
-      }
-      
       setAiReport(errorMsg);
     } finally {
       setIsGeneratingReport(false);
@@ -694,9 +660,7 @@ const App = () => {
 
                 <div className="space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-100">
                   
-                  {hasApiKey ? (
-                    <>
-                      <div>
+                    <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Nombre del Paciente</label>
                         <div className="relative">
                           <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4" />
@@ -708,16 +672,16 @@ const App = () => {
                             className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-sm"
                           />
                         </div>
-                      </div>
+                    </div>
                       
-                      <button 
+                    <button 
                         onClick={generateAIReport}
                         disabled={isGeneratingReport || history.length < 5}
                         className={`w-full flex items-center justify-center space-x-2 py-3.5 rounded-xl font-medium transition-all shadow-md
                           ${(isGeneratingReport || history.length < 5) 
                             ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' 
                             : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200 hover:-translate-y-0.5'}`}
-                      >
+                    >
                         {isGeneratingReport ? (
                           <>
                             <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
@@ -729,24 +693,10 @@ const App = () => {
                             <span>Generar Informe con Gemini</span>
                           </>
                         )}
-                      </button>
-                      {history.length < 5 && !isSimulating && (
-                          <p className="text-xs text-center text-amber-600 bg-amber-50 p-2 rounded-lg">Se necesitan más datos para generar reporte.</p>
-                      )}
-                    </>
-                  ) : (
-                    <div className="text-center py-4">
-                       <p className="text-sm text-slate-600 mb-4">Para generar reportes clínicos, necesitas conectar tu cuenta de Google.</p>
-                       <button 
-                         onClick={handleConnectGemini}
-                         className="w-full flex items-center justify-center py-3 rounded-xl bg-white border border-slate-300 text-slate-700 font-medium hover:bg-slate-50 hover:shadow-sm transition-all text-sm"
-                       >
-                         <Key className="w-4 h-4 mr-2 text-indigo-500" />
-                         Vincular Cuenta Gemini
-                       </button>
-                       <p className="text-[10px] text-slate-400 mt-2">Se abrirá una ventana segura de Google AI Studio.</p>
-                    </div>
-                  )}
+                    </button>
+                    {history.length < 5 && !isSimulating && (
+                        <p className="text-xs text-center text-amber-600 bg-amber-50 p-2 rounded-lg">Se necesitan más datos para generar reporte.</p>
+                    )}
 
                 </div>
               </div>
